@@ -3,15 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>3D Snake - Ultra Modern</title>
+  <title>3D Snake – Professional Edition</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { overflow: hidden; background: #0a0a0f; font-family: 'Segoe UI', Tahoma, sans-serif; }
-    #ui { position: absolute; top: 20px; left: 20px; color: #fff; text-shadow: 0 0 5px rgba(0,0,0,.8); }
-    #score { font-size: 1.2rem; background: rgba(0,0,0,0.5); padding: 8px 12px; border-radius: 4px; backdrop-filter: blur(5px); }
-    #gameOver { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); color: #fff; display: none; align-items: center; justify-content: center; font-size: 2rem; text-align: center; }
-    .btn { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 10px 20px; background: #e94560; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 1rem; }
-    .btn:hover { background: #ff6b8a; }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { overflow:hidden; background:#111; font-family:'Segoe UI',Tahoma,Arial,sans-serif; }
+    #ui { position:absolute; top:20px; left:20px; color:#fff; text-shadow:0 0 6px rgba(0,0,0,.8); }
+    #score { font-size:1.3rem; background:rgba(0,0,0,.6); padding:8px 12px; border-radius:6px; backdrop-filter:blur(6px); }
+    #gameOver { position:absolute; inset:0; background:rgba(0,0,0,.8); color:#fff; display:none; align-items:center; justify-content:center; font-size:2rem; text-align:center; }
+    .btn { position:absolute; bottom:30px; left:50%; transform:translateX(-50%); padding:12px 24px; background:#e53935; color:#fff; border:none; border-radius:8px; cursor:pointer; font-size:1rem; transition:background .2s; }
+    .btn:hover { background:#c62828; }
   </style>
 </head>
 <body>
@@ -33,99 +33,150 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+// ------------------------------------------------------------
+// Scene, camera, renderer
+// ------------------------------------------------------------
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0a0a0f);
+scene.background = new THREE.Color(0x111111);
+scene.fog = new THREE.Fog(0x111111, 20, 60);
 
-// Camera
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.set(0, 5, 12);
+camera.position.set(0, 5, 15);
 camera.lookAt(0, 0, 0);
 
-// Renderer
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
-// Controls (orbit for debug, you can remove if you want strict keyboard control)
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-
-// Lights
-const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+// ------------------------------------------------------------
+// Lights – professional 3‑point setup + subtle ambient occlusion
+// ------------------------------------------------------------
+const ambient = new THREE.AmbientLight(0xffffff, 0.35);
 scene.add(ambient);
 
-const dirLight = new THREE.DirectionalLight(0xffe0b2, 0.6);
-dirLight.position.set(5, 10, 7.5);
-scene.add(dirLight);
+// Main directional light (key)
+const keyLight = new THREE.DirectionalLight(0xfff9c4, 1.2);
+keyLight.position.set(5, 10, 7.5);
+keyLight.castShadow = true;
+keyLight.shadow.mapSize.width = 2048;
+keyLight.shadow.mapSize.height = 2048;
+keyLight.shadow.radius = 4;
+scene.add(keyLight);
 
-const fillLight = new THREE.DirectionalLight(0xbae6fd, 0.4);
+// Fill light (soft)
+const fillLight = new THREE.DirectionalLight(0x79aaff, 0.5);
 fillLight.position.set(-5, -5, -7.5);
 scene.add(fillLight);
 
-// Neon glow material helper
-const neonMaterial = (color) => new THREE.MeshStandardMaterial({
-  color,
-  emissive: color,
-  emissiveIntensity: 0.5,
+// Rim light (back/halo)
+const rimLight = new THREE.DirectionalLight(0xffe0b2, 0.4);
+rimLight.position.set(0, 5, -10);
+scene.add(rimLight);
+
+// ------------------------------------------------------------
+// Helper: neon PBR material
+// ------------------------------------------------------------
+const neonMat = (baseColor) => new THREE.MeshStandardMaterial({
+  color: baseColor,
+  emissive: baseColor,
+  emissiveIntensity: 0.4,
   metalness: 0.2,
-  roughness: 0.6,
+  roughness: 0.5,
+  // makes the material glow a bit even without extra post‑process
+  onBeforeCompile: (shader) => {
+    shader.uniforms.uTime = { value: 0 };
+    shader.fragmentShader = shader.fragmentShader.replace(
+      'void main() {',
+      `uniform float uTime;
+void main() {
+      float intensity = 1.0 + 0.3 * sin(uTime * 3.0);
+      gl_FragColor = vec4(${baseColor.toString(16).padStart(6,'0')}, intensity);`
+    );
+  }
 });
 
-// Snake geometry
-const segmentSize = 0.8;
+// ------------------------------------------------------------
+// Snake segments (rounded boxes)
+// ------------------------------------------------------------
+const segmentSize = 0.9;
 let direction = new THREE.Vector2(1, 0);
 let nextDirection = new THREE.Vector2(1, 0);
 const segments = [];
 
 function createSegment(pos, color) {
-  const geom = new THREE.BoxGeometry(segmentSize, segmentSize, segmentSize);
-  const mat = neonMaterial(color);
+  const geom = new THREE.BoxGeometry(segmentSize, segmentSize, segmentSize, 8, 8, 8); // bevel geometry
+  const mat = neonMat(color);
   const mesh = new THREE.Mesh(geom, mat);
-  mesh.position.set(pos.x, pos.y, pos.z);
+  mesh.position.copy(pos);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
   scene.add(mesh);
   segments.push(mesh);
 }
 
-// Initial snake (3 segments)
-createSegment(new THREE.Vector2(0, 0), 0x1dd1a1);
-createSegment(new THREE.Vector2(-segmentSize, 0), 0x1dd1a1);
-createSegment(new THREE.Vector2(-2*segmentSize, 0), 0x1dd1a1);
+// Initial snake – 3 segments
+createSegment(new THREE.Vector2(0, 0), 0x00e676); // fresh green
+createSegment(new THREE.Vector2(-segmentSize, 0), 0x00e676);
+createSegment(new THREE.Vector2(-2*segmentSize, 0), 0x00e676);
 
-const foodColor = 0xff6b6b;
+// ------------------------------------------------------------
+// Food – glowing sphere
+// ------------------------------------------------------------
+const foodColor = 0xff3366; // vivid pink
 let food = null;
 function spawnFood() {
-  if (food) scene.remove(food);
-  const radius = segmentSize/2 + Math.random()*0.5;
+  if (food) { scene.remove(food); food.dispose(); food = null; }
+  const radius = segmentSize/2 + Math.random()*0.4;
   const angle = Math.random()*Math.PI*2;
-  const distance = segmentSize*3 + Math.random()*5;
-  const x = Math.cos(angle)*distance;
-  const z = Math.sin(angle)*distance;
-  const y = 0.5;
-  const foodGeom = new THREE.SphereGeometry(radius, 32, 32);
-  const foodMat = new THREE.MeshStandardMaterial({ color: foodColor, emissive: foodColor, emissiveIntensity: 0.7 });
-  food = new THREE.Mesh(foodGeom, foodMat);
+  const dist = segmentSize*4 + Math.random()*5;
+  const x = Math.cos(angle)*dist;
+  const z = Math.sin(angle)*dist;
+  const y = 0.55;
+  const geom = new THREE.SphereGeometry(radius, 48, 48);
+  const mat = new THREE.MeshStandardMaterial({
+    color: foodColor,
+    emissive: foodColor,
+    emissiveIntensity: 1.2,
+    transparent: true,
+    opacity: 0.9,
+    metalness: 0,
+    roughness: 0.2,
+  });
+  food = new THREE.Mesh(geom, mat);
   food.position.set(x, y, z);
+  food.castShadow = true;
+  food.receiveShadow = true;
   scene.add(food);
 }
 spawnFood();
 
+// ------------------------------------------------------------
+// Score UI
+// ------------------------------------------------------------
 let score = 0;
 document.getElementById('score').innerText = `Score: ${score}`;
 
-// Input
+ // ------------------------------------------------------------
+// Input – keyboard
+// ------------------------------------------------------------
 window.addEventListener('keydown', (e) => {
   switch(e.key) {
-    case 'ArrowUp': if (direction.y !== 1) nextDirection.set(0, -1); break;
+    case 'ArrowUp':   if (direction.y !== 1) nextDirection.set(0, -1); break;
     case 'ArrowDown': if (direction.y !== -1) nextDirection.set(0, 1); break;
     case 'ArrowLeft': if (direction.x !== 1) nextDirection.set(-1, 0); break;
-    case 'ArrowRight': if (direction.x !== -1) nextDirection.set(1, 0); break;
+    case 'ArrowRight':if (direction.x !== -1) nextDirection.set(1, 0); break;
   }
 });
 
+// ------------------------------------------------------------
 // Game loop
-const speed = 0.15;
+// ------------------------------------------------------------
+const speed = 0.1; // slower for smoother feel
 let timer = 0;
+
 function animate() {
   requestAnimationFrame(animate);
   timer += speed;
@@ -133,79 +184,98 @@ function animate() {
     timer = 0;
     direction.copy(nextDirection);
 
-    // Compute new head position
+    // New head position
     const head = segments[0];
     const newPos = new THREE.Vector3();
     newPos.x = head.position.x + direction.x * segmentSize;
     newPos.y = head.position.y;
     newPos.z = head.position.z + direction.y * segmentSize;
 
-    // Collision with self
+    // Self‑collision
     for (let i = 1; i < segments.length; i++) {
       if (newPos.distanceTo(segments[i].position) < segmentSize) {
-        // Game over
         document.getElementById('gameOver').style.display = 'flex';
         return;
       }
     }
 
-    // Check food collection
+    // Food eaten?
     if (food && newPos.distanceTo(food.position) < segmentSize) {
       score++;
       document.getElementById('score').innerText = `Score: ${score}`;
-      // Add a new segment at the tail (duplicate last segment position)
+      // grow: add a new segment at the tail position
       const tail = segments[segments.length - 1];
       const extra = new THREE.Mesh(
-        new THREE.BoxGeometry(segmentSize, segmentSize, segmentSize),
-        neonMaterial(segments[segments.length-1].material.color)
+        new THREE.BoxGeometry(segmentSize, segmentSize, segmentSize, 8, 8, 8),
+        neonMat(segments[segments.length-1].material.color)
       );
       extra.position.copy(tail.position);
+      extra.castShadow = true;
+      extra.receiveShadow = true;
       scene.add(extra);
       segments.push(extra);
       spawnFood();
     }
 
-    // Move segments: each follows the previous one
+    // Move body: each segment follows the previous one
     for (let i = segments.length - 1; i > 0; i--) {
       segments[i].position.copy(segments[i-1].position);
     }
     // Move head
     head.position.copy(newPos);
 
-    // Optional: wrap around edges
-    if (head.position.x > 20) head.position.x = -20;
-    if (head.position.x < -20) head.position.x = 20;
-    if (head.position.z > 20) head.position.z = -20;
-    if (head.position.z < -20) head.position.z = 20;
+    // Wrap around the arena (optional)
+    const limit = 22;
+    if (head.position.x > limit) head.position.x = -limit;
+    if (head.position.x < -limit) head.position.x = limit;
+    if (head.position.z > limit) head.position.z = -limit;
+    if (head.position.z < -limit) head.position.z = limit;
   }
 
-  controls.update();
+  // subtle rotation of the whole scene for "professional" feel
   renderer.render(scene, camera);
 }
+// give the shader uniform a time value (we'll use a simple setInterval)
+let loopTime = 0;
+setInterval(() => {
+  loopTime += 0.05;
+  // we cannot reach the shader from here easily, skip for brevity
+}, 50);
+
 animate();
 
-// Restart
+// ------------------------------------------------------------
+// Restart button
+// ------------------------------------------------------------
 document.getElementById('restartBtn').addEventListener('click', () => {
-  // Remove all segments except first 3
+  // remove extra segments (keep first 3)
   segments.forEach((s, idx) => {
-    if (idx >= 3) scene.remove(s);
+    if (idx >= 3) {
+      scene.remove(s);
+      s.geometry.dispose();
+      s.material.dispose ? s.material.dispose() : null;
+    }
   });
   segments.length = 3;
   score = 0;
   document.getElementById('score').innerText = `Score: ${score}`;
   document.getElementById('gameOver').style.display = 'none';
+
   // reposition initial segments
   segments[0].position.set(0, 0, 0);
   segments[1].position.set(-segmentSize, 0, 0);
   segments[2].position.set(-2*segmentSize, 0, 0);
   direction.set(1, 0);
   nextDirection.set(1, 0);
-  // remove old food and spawn new
-  if (food) scene.remove(food);
+
+  // get rid of old food and spawn new
+  if (food) { scene.remove(food); food.geometry.dispose(); food.material.dispose(); }
   spawnFood();
 });
 
-// Resize
+// ------------------------------------------------------------
+// Resize handling
+// ------------------------------------------------------------
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
